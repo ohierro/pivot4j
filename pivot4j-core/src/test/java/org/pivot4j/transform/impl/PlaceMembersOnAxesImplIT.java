@@ -23,6 +23,7 @@ import org.olap4j.mdx.IdentifierNode;
 import org.olap4j.metadata.Cube;
 import org.olap4j.metadata.Hierarchy;
 import org.olap4j.metadata.Member;
+import org.pivot4j.transform.PlaceHierarchiesOnAxes;
 import org.pivot4j.transform.PlaceMembersOnAxes;
 
 public class PlaceMembersOnAxesImplIT extends
@@ -95,6 +96,42 @@ public class PlaceMembersOnAxesImplIT extends
 				is(equalTo("SELECT {[Measures].[Unit Sales], [Measures].[Store Cost], [Measures].[Store Sales]} ON COLUMNS, "
 						+ "CrossJoin({[Promotion Media].[All Media], [Promotion Media].[Bulk Mail], [Promotion Media].[Daily Paper]}, "
 						+ "{[Product].[Food], [Product].[Drink]}) ON ROWS FROM [Sales]")));
+
+		getPivotModel().getCellSet();
+	}
+
+	@Test
+	public void testPlaceMembersWithHierarchies() throws OlapException {
+		PlaceMembersOnAxes transform = getTransform();
+		PlaceHierarchiesOnAxes placeHierarchiesTransform = getPivotModel().getTransform(PlaceHierarchiesOnAxes.class);
+
+		Cube cube = getPivotModel().getCube();
+
+		Hierarchy promotionMedia = cube.getHierarchies().get("Promotion Media");
+		Hierarchy product = cube.getHierarchies().get("Product");
+
+		List<Member> members = new ArrayList<Member>();
+
+		placeHierarchiesTransform.addHierarchy(Axis.ROWS, promotionMedia, false, 0);
+
+//		Member allMedia = promotionMedia.getDefaultMember();
+		Member allProducts = product.getDefaultMember();
+
+//		members.add(allMedia);
+//		members.add(allMedia.getChildMembers().get("Bulk Mail"));
+//		members.add(allMedia.getChildMembers().get("Daily Paper"));
+
+		members.add(allProducts.getChildMembers().get("Food"));
+		members.add(allProducts.getChildMembers().get("Drink"));
+
+		transform.placeMembers(Axis.ROWS, members);
+
+		assertThat(
+				"Unexpected MDX query",
+				getPivotModel().getCurrentMdx(),
+				is(equalTo("SELECT {[Measures].[Unit Sales], [Measures].[Store Cost], [Measures].[Store Sales]} ON COLUMNS," +
+						" CrossJoin({[Product].[Food], [Product].[Drink]}, [Promotion Media].[All Media].Children)" +
+								" ON ROWS FROM [Sales]")));
 
 		getPivotModel().getCellSet();
 	}

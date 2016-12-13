@@ -133,6 +133,7 @@ public class PlaceMembersOnAxesImpl extends AbstractTransform implements
 				.getMemberHierarchyCache());
 
 		List<Exp> expressions = new ArrayList<Exp>(hierarchies.size());
+		List<Hierarchy> hierarchiesInUse = new ArrayList<Hierarchy>();
 
 		for (Hierarchy hierarchy : hierarchies) {
 			List<Member> selection = memberMap.get(hierarchy);
@@ -148,6 +149,29 @@ public class PlaceMembersOnAxesImpl extends AbstractTransform implements
 				}
 
 				expressions.add(new FunCall("{}", Syntax.Braces, sets));
+
+			}
+
+			// we have added member and for that, we mark hierarchy as used
+			hierarchiesInUse.add(hierarchy);
+		}
+
+		if (quax.getHierarchies().size() > 0) {
+			for (Hierarchy hierarchy : quax.getHierarchies()) {
+				if (!hierarchiesInUse.contains(hierarchy)) {
+					try {
+						Member allMember = hierarchy.getDefaultMember();
+
+						Exp allExp = new MemberExp(allMember);
+						FunCall mAllChildren = new FunCall("Children",
+								Syntax.Property);
+						mAllChildren.getArgs().add(allExp);
+
+						expressions.add(mAllChildren);
+					} catch (OlapException e) {
+						e.printStackTrace();
+					}
+				}
 			}
 		}
 
