@@ -18,6 +18,8 @@ import org.pivot4j.ui.RenderContext;
 
 public interface Aggregator {
 
+	boolean isTwoPhaseAggregator();
+
 	String getName();
 
 	Axis getAxis();

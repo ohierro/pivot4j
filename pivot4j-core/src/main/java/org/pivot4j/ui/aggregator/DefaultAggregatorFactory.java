@@ -33,6 +33,7 @@ public class DefaultAggregatorFactory implements AggregatorFactory {
 		names.add(MinimumAggregator.NAME);
 		names.add(MaximumAggregator.NAME);
 		names.add(CountAggregator.NAME);
+		names.add(PercentageAggregator.NAME);
 
 		return names;
 	}
@@ -66,6 +67,8 @@ public class DefaultAggregatorFactory implements AggregatorFactory {
 			aggregator = new MaximumAggregator(axis, members, level, measure);
 		} else if (CountAggregator.NAME.equals(name)) {
 			aggregator = new CountAggregator(axis, members, level, measure);
+		} else if (PercentageAggregator.NAME.equals(name)) {
+			aggregator = new PercentageAggregator(axis, members, level, measure);
 		}
 
 		if (aggregator == null) {

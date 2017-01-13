@@ -8,39 +8,11 @@
  */
 package org.pivot4j.ui.table;
 
-import static org.pivot4j.ui.CellTypes.AGG_VALUE;
-import static org.pivot4j.ui.CellTypes.LABEL;
-import static org.pivot4j.ui.CellTypes.VALUE;
-import static org.pivot4j.ui.table.TableCellTypes.FILL;
-import static org.pivot4j.ui.table.TableCellTypes.TITLE;
-import static org.pivot4j.ui.table.TablePropertyCategories.CELL;
-import static org.pivot4j.ui.table.TablePropertyCategories.HEADER;
-
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
 import org.apache.commons.configuration.HierarchicalConfiguration;
 import org.apache.commons.lang.NullArgumentException;
 import org.apache.commons.lang.StringUtils;
-import org.olap4j.Axis;
-import org.olap4j.Cell;
-import org.olap4j.CellSet;
-import org.olap4j.CellSetAxis;
-import org.olap4j.OlapException;
-import org.olap4j.Position;
-import org.olap4j.metadata.Hierarchy;
-import org.olap4j.metadata.Level;
-import org.olap4j.metadata.Measure;
-import org.olap4j.metadata.Member;
-import org.olap4j.metadata.Property;
+import org.olap4j.*;
+import org.olap4j.metadata.*;
 import org.pivot4j.PivotException;
 import org.pivot4j.PivotModel;
 import org.pivot4j.impl.PivotModelImpl;
@@ -49,13 +21,18 @@ import org.pivot4j.ui.AbstractPivotRenderer;
 import org.pivot4j.ui.aggregator.Aggregator;
 import org.pivot4j.ui.aggregator.AggregatorFactory;
 import org.pivot4j.ui.aggregator.AggregatorPosition;
-import org.pivot4j.util.MemberHierarchyCache;
-import org.pivot4j.util.MemberSelection;
-import org.pivot4j.util.OlapUtils;
-import org.pivot4j.util.TreeNode;
-import org.pivot4j.util.TreeNodeCallback;
+import org.pivot4j.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.io.Serializable;
+import java.util.*;
+
+import static org.pivot4j.ui.CellTypes.*;
+import static org.pivot4j.ui.table.TableCellTypes.FILL;
+import static org.pivot4j.ui.table.TableCellTypes.TITLE;
+import static org.pivot4j.ui.table.TablePropertyCategories.CELL;
+import static org.pivot4j.ui.table.TablePropertyCategories.HEADER;
 
 public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, TableRenderCallback> {
 
@@ -491,7 +468,7 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 	 * @return
 	 */
 	protected TableRenderContext createRenderContext(PivotModel model, TableHeaderNode columnRoot,
-			TableHeaderNode rowRoot) {
+													 TableHeaderNode rowRoot) {
 		int columnHeaderCount = columnRoot.getMaxRowIndex();
 		int rowHeaderCount = rowRoot.getMaxRowIndex();
 
@@ -511,7 +488,7 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 	 * @param callback
 	 */
 	protected void renderHeader(final TableRenderContext context, final TableHeaderNode columnRoot,
-			final TableHeaderNode rowRoot, final TableRenderCallback callback) {
+								final TableHeaderNode rowRoot, final TableRenderCallback callback) {
 
 		callback.startHeader(context);
 		context.setRenderPropertyCategory(HEADER);
@@ -582,10 +559,96 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 	 * @param callback
 	 */
 	protected void renderBody(final TableRenderContext context, final TableHeaderNode columnRoot,
-			final TableHeaderNode rowRoot, final TableRenderCallback callback) {
+							  final TableHeaderNode rowRoot, final TableRenderCallback callback) {
 		callback.startBody(context);
 
 		int count = rowRoot.getColSpan();
+
+		// check if we need to do a first pass aggregation
+		boolean needFirstPass = false;
+		for (int i = 0; i < context.getColumnCount(); i++) {
+			Cell cell = null;
+
+			TableHeaderNode columnNode = columnRoot.getLeafNodeAtColIndex(i);
+
+			if (columnNode != null && columnNode.getPosition() != null && columnNode.getPosition().getOrdinal() != -1
+					&& rowRoot.getPosition() != null && rowRoot.getPosition().getOrdinal() != -1) {
+				cell = context.getCellSet().getCell(columnNode.getPosition(), rowRoot.getPosition());
+			}
+
+			for (AggregatorPosition position : AggregatorPosition.values()) {
+				for (Aggregator aggregator : rowRoot.getReference().getAggregators(position)) {
+					if (aggregator.isTwoPhaseAggregator()) {
+						needFirstPass = true;
+						aggregator.reset();
+					}
+				}
+			}
+			context.setPosition(context.getColumnPosition());
+
+			for (AggregatorPosition position : AggregatorPosition.values()) {
+				for (Aggregator aggregator : columnRoot.getReference().getAggregators(position)) {
+					if (aggregator.isTwoPhaseAggregator()) {
+						needFirstPass = true;
+						aggregator.reset();
+					}
+				}
+			}
+		}
+		// end of check
+
+		// do a first pass if necessary
+		if (needFirstPass) {
+			for (int rowIndex = 0; rowIndex < count; rowIndex++) {
+				context.setAxis(Axis.ROWS);
+				context.setColIndex(0);
+				context.setRowIndex(rowIndex + context.getColumnHeaderCount());
+
+				rowRoot.walkChildrenAtColIndex(new TreeNodeCallback<TableAxisContext>() {
+
+					@Override
+					public int handleTreeNode(TreeNode<TableAxisContext> node) {
+						TableHeaderNode headerNode = (TableHeaderNode) node;
+
+						if (headerNode.getRowIndex() == 0) {
+							return TreeNodeCallback.CONTINUE;
+						}
+
+						context.setColIndex(headerNode.getRowIndex() - 1);
+						context.setColSpan(headerNode.getRowSpan());
+						context.setRowSpan(headerNode.getColSpan());
+						context.setMember(headerNode.getMember());
+						context.setLevel(headerNode.getMemberLevel());
+						context.setProperty(headerNode.getProperty());
+						context.setHierarchy(headerNode.getHierarchy());
+						context.setPosition(headerNode.getPosition());
+						context.setRowPosition(headerNode.getPosition());
+						context.setAggregator(headerNode.getAggregator());
+						context.setCell(null);
+						context.setRenderPropertyCategory(HEADER);
+
+						if (headerNode.isAggregation()) {
+							context.setCellType(AGG_VALUE);
+						} else if (context.getMember() == null && context.getProperty() == null) {
+							if (context.getHierarchy() == null) {
+								context.setCellType(FILL);
+							} else {
+								context.setCellType(TITLE);
+							}
+						} else {
+							context.setCellType(LABEL);
+						}
+
+						if (headerNode.getChildCount() == 0) {
+							processFirstPass(context, columnRoot, rowRoot, (TableHeaderNode) node, callback);
+						}
+
+						return TreeNodeCallback.CONTINUE;
+					}
+				}, rowIndex);
+			}
+		}
+		// end of first pass
 
 		for (int rowIndex = 0; rowIndex < count; rowIndex++) {
 			context.setAxis(Axis.ROWS);
@@ -648,6 +711,78 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 		callback.endBody(context);
 	}
 
+	protected void processFirstPass(TableRenderContext context, TableHeaderNode columnRoot, TableHeaderNode rowRoot,
+									TableHeaderNode rowNode, TableRenderCallback callback) {
+		context.setCellType(VALUE);
+		context.setRenderPropertyCategory(CELL);
+
+		for (int i = 0; i < context.getColumnCount(); i++) {
+			Cell cell = null;
+
+			TableHeaderNode columnNode = columnRoot.getLeafNodeAtColIndex(i);
+
+			if (columnNode != null && columnNode.getPosition() != null && columnNode.getPosition().getOrdinal() != -1
+					&& rowNode.getPosition() != null && rowNode.getPosition().getOrdinal() != -1) {
+				cell = context.getCellSet().getCell(columnNode.getPosition(), rowNode.getPosition());
+			}
+
+			context.setColIndex(context.getRowHeaderCount() + i);
+			context.setColSpan(1);
+			context.setRowSpan(1);
+			context.setAggregator(null);
+
+			context.setAxis(null);
+			context.setHierarchy(null);
+			context.setLevel(null);
+			context.setMember(null);
+			context.setCell(cell);
+
+			context.setPosition(null);
+			context.setColumnPosition(columnNode.getPosition());
+			context.setRowPosition(rowNode.getPosition());
+
+			if (columnNode.getAggregator() == null) {
+				if (rowNode.getAggregator() != null) {
+					context.setAggregator(rowNode.getAggregator());
+					context.setAxis(Axis.ROWS);
+				}
+			} else if (rowNode.getAggregator() == null || columnNode.getAggregator().getMeasure() != null) {
+				context.setAggregator(columnNode.getAggregator());
+				context.setAxis(Axis.COLUMNS);
+			} else if (rowNode.getAggregator().getMeasure() != null) {
+				context.setAggregator(rowNode.getAggregator());
+				context.setAxis(Axis.ROWS);
+			}
+
+			for (AggregatorPosition position : AggregatorPosition.values()) {
+				for (Aggregator aggregator : rowRoot.getReference().getAggregators(position)) {
+					if (aggregator.isTwoPhaseAggregator()) {
+						aggregate(context, rowNode, aggregator, position);
+					}
+				}
+			}
+
+			context.setPosition(context.getColumnPosition());
+
+			for (AggregatorPosition position : AggregatorPosition.values()) {    // todo: only hierachy or member¿?
+				int counter = 0;
+				for (Aggregator aggregator : columnRoot.getReference().getAggregators(position)) {
+					if (counter == context.getColumnPosition().getOrdinal() && aggregator.isTwoPhaseAggregator()) {
+						aggregate(context, columnNode, aggregator, position);
+					}
+
+					counter++;
+				}
+//				for (int j=0; j<columnRoot.getReference().getAggregators(position).size(); j++) {
+//				Aggregator aggregator = columnRoot.getReference().getAggregators(position).get(context.getColumnPosition().getOrdinal());
+//				if (aggregator.isTwoPhaseAggregator()) {
+//					aggregate(context, columnNode, aggregator, position);
+//				}
+//				}
+			}
+		}
+	}
+
 	/**
 	 * @param context
 	 * @param columnRoot
@@ -656,7 +791,7 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 	 * @param callback
 	 */
 	protected void renderDataRow(TableRenderContext context, TableHeaderNode columnRoot, TableHeaderNode rowRoot,
-			TableHeaderNode rowNode, TableRenderCallback callback) {
+								 TableHeaderNode rowNode, TableRenderCallback callback) {
 		context.setCellType(VALUE);
 		context.setRenderPropertyCategory(CELL);
 
@@ -707,7 +842,9 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 
 			for (AggregatorPosition position : AggregatorPosition.values()) {
 				for (Aggregator aggregator : rowRoot.getReference().getAggregators(position)) {
-					aggregate(context, rowNode, aggregator, position);
+					if (!aggregator.isTwoPhaseAggregator()) {
+						aggregate(context, rowNode, aggregator, position);
+					}
 				}
 			}
 
@@ -715,7 +852,9 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 
 			for (AggregatorPosition position : AggregatorPosition.values()) {
 				for (Aggregator aggregator : columnRoot.getReference().getAggregators(position)) {
-					aggregate(context, columnNode, aggregator, position);
+					if (!aggregator.isTwoPhaseAggregator()) {
+						aggregate(context, columnNode, aggregator, position);
+					}
 				}
 			}
 		}
@@ -730,7 +869,7 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 	 * @param position
 	 */
 	protected void aggregate(TableRenderContext context, TableHeaderNode node, Aggregator aggregator,
-			AggregatorPosition position) {
+							 AggregatorPosition position) {
 		Measure measure = aggregator.getMeasure();
 
 		List<Member> members = aggregator.getMembers();
@@ -779,20 +918,20 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 		while (parent != null) {
 			if (parent.getHierarchyDescendents() == 1 && parent.getMemberChildren() > 0) {
 				switch (position) {
-				case Grand:
-					return;
-				case Hierarchy:
-					if (!members.contains(parent.getMember())) {
+					case Grand:
 						return;
-					}
-					break;
-				case Member:
-					if (node == parent || members.lastIndexOf(parent.getMember()) == members.size() - 1) {
-						return;
-					}
-					break;
-				default:
-					assert false;
+					case Hierarchy:
+						if (!members.contains(parent.getMember())) {
+							return;
+						}
+						break;
+					case Member:
+						if (node == parent || members.lastIndexOf(parent.getMember()) == members.size() - 1) {
+							return;
+						}
+						break;
+					default:
+						assert false;
 				}
 			}
 
@@ -809,7 +948,7 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 	 * @param callback
 	 */
 	protected void renderHeaderCorner(TableRenderContext context, TableHeaderNode columnRoot, TableHeaderNode rowRoot,
-			TableRenderCallback callback) {
+									  TableRenderCallback callback) {
 		int offset = 0;
 
 		if (getShowDimensionTitle()) {
@@ -1112,7 +1251,7 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 						start--;
 					}
 
-					if (i < start) {
+					if (i == start) {
 						Member lastMember = lastPosition.getMembers().get(i);
 
 						if (OlapUtils.equals(lastMember.getHierarchy(), member.getHierarchy())
@@ -1209,6 +1348,24 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 		}
 
 		if (lastPosition != null) {
+
+			// 2 pass agg
+
+//			Member lastMember = lastPosition.getMembers().get(0);
+
+			for (String aggregatorName : hierarchyAggregatorNames) {
+//				createAggregators(aggregatorName, nodeContext, hierarchyAggregators, axisRoot, null,
+//						lastPosition.getMembers().subList(0, i + 1), totalMeasures);
+				createAggregators(aggregatorName, nodeContext, hierarchyAggregators, axisRoot, null,
+						lastPosition.getMembers().subList(0, 1), totalMeasures);
+
+//				for (String aggregatorName : aggregatorNames) {
+//					createAggregators(aggregatorName, nodeContext, aggregators, axisRoot, null, members,
+//							grandTotalMeasures);
+//				}
+			}
+			// 2 pass agg
+
 			int memberCount = lastPosition.getMembers().size();
 
 			int start = memberCount - 1;
@@ -1243,9 +1400,13 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 				}
 
 				if (!hierarchyAggregatorNames.isEmpty()) {
+					// exclude 2 phases aggregators
 					for (String aggregatorName : hierarchyAggregatorNames) {
-						createAggregators(aggregatorName, nodeContext, hierarchyAggregators, axisRoot, null,
-								lastPosition.getMembers().subList(0, i), totalMeasures);
+						//todo: find agg in hierarchyAggregators
+						if (!aggregatorName.equals("PCT")) {
+							createAggregators(aggregatorName, nodeContext, hierarchyAggregators, axisRoot, null,
+									lastPosition.getMembers().subList(0, i), totalMeasures);
+						}
 					}
 				}
 			}
@@ -1352,7 +1513,7 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 	 * @param measures
 	 */
 	private void createAggregators(String aggregatorName, TableAxisContext context, List<Aggregator> aggregators,
-			TableHeaderNode axisRoot, Level level, List<Member> members, Set<Measure> measures) {
+								   TableHeaderNode axisRoot, Level level, List<Member> members, Set<Measure> measures) {
 		AggregatorFactory factory = getAggregatorFactory();
 
 		if (measures.isEmpty()) {
@@ -1425,7 +1586,8 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 			hierarchy = aggregator.getLevel().getHierarchy();
 		}
 
-		if (aggregator.getLevel() == null || getShowParentMembers()) {
+		if (!aggregator.isTwoPhaseAggregator() &&
+				(aggregator.getLevel() == null || getShowParentMembers())) {
 			TableHeaderNode node = new TableHeaderNode(nodeContext);
 			node.setAggregation(true);
 			node.setAggregator(aggregator);
@@ -1519,96 +1681,13 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 		node.getReference().getRowSpanCache().clear();
 	}
 
-	static class AggregationTarget {
-
-		private Member parent;
-
-		private Level level;
-
-		/**
-		 * @param parent
-		 * @param level
-		 */
-		AggregationTarget(Member parent, Level level) {
-			this.parent = parent;
-			this.level = level;
-		}
-
-		/**
-		 * @return the parent
-		 */
-		public Member getParent() {
-			return parent;
-		}
-
-		/**
-		 * @return the level
-		 */
-		public Level getLevel() {
-			return level;
-		}
-	}
-
-	static class AggregatePosition implements Position {
-
-		private List<Member> members;
-
-		/**
-		 * @param members
-		 */
-		AggregatePosition(List<Member> members) {
-			this.members = members;
-		}
-
-		/**
-		 * @see org.olap4j.Position#getMembers()
-		 */
-		@Override
-		public List<Member> getMembers() {
-			return members;
-		}
-
-		/**
-		 * @see org.olap4j.Position#getOrdinal()
-		 */
-		@Override
-		public int getOrdinal() {
-			return -1;
-		}
-
-		/**
-		 * @see java.lang.Object#hashCode()
-		 */
-		@Override
-		public int hashCode() {
-			return 31 + members.hashCode();
-		}
-
-		/**
-		 * @see java.lang.Object#equals(java.lang.Object)
-		 */
-		@Override
-		public boolean equals(Object obj) {
-			if (this == obj) {
-				return true;
-			} else if (obj == null) {
-				return false;
-			} else if (getClass() != obj.getClass()) {
-				return false;
-			}
-
-			AggregatePosition other = (AggregatePosition) obj;
-			return members.equals(other.members);
-		}
-	}
-
 	/**
 	 * @param context
 	 * @param filterRoot
 	 * @param callback
 	 */
 	protected void renderFilter(final TableRenderContext context, TableHeaderNode filterRoot,
-			final TableRenderCallback callback) {
+								final TableRenderCallback callback) {
 		Hierarchy hierarchy = filterRoot.getHierarchy();
 
 		context.setAxis(Axis.FILTER);
@@ -1706,5 +1785,88 @@ public class TableRenderer extends AbstractPivotRenderer<TableRenderContext, Tab
 
 		callback.endBody(context);
 		callback.endTable(context);
+	}
+
+	static class AggregationTarget {
+
+		private Member parent;
+
+		private Level level;
+
+		/**
+		 * @param parent
+		 * @param level
+		 */
+		AggregationTarget(Member parent, Level level) {
+			this.parent = parent;
+			this.level = level;
+		}
+
+		/**
+		 * @return the parent
+		 */
+		public Member getParent() {
+			return parent;
+		}
+
+		/**
+		 * @return the level
+		 */
+		public Level getLevel() {
+			return level;
+		}
+	}
+
+	static class AggregatePosition implements Position {
+
+		private List<Member> members;
+
+		/**
+		 * @param members
+		 */
+		AggregatePosition(List<Member> members) {
+			this.members = members;
+		}
+
+		/**
+		 * @see org.olap4j.Position#getMembers()
+		 */
+		@Override
+		public List<Member> getMembers() {
+			return members;
+		}
+
+		/**
+		 * @see org.olap4j.Position#getOrdinal()
+		 */
+		@Override
+		public int getOrdinal() {
+			return -1;
+		}
+
+		/**
+		 * @see java.lang.Object#hashCode()
+		 */
+		@Override
+		public int hashCode() {
+			return 31 + members.hashCode();
+		}
+
+		/**
+		 * @see java.lang.Object#equals(java.lang.Object)
+		 */
+		@Override
+		public boolean equals(Object obj) {
+			if (this == obj) {
+				return true;
+			} else if (obj == null) {
+				return false;
+			} else if (getClass() != obj.getClass()) {
+				return false;
+			}
+
+			AggregatePosition other = (AggregatePosition) obj;
+			return members.equals(other.members);
+		}
 	}
 }

@@ -325,4 +325,9 @@ public abstract class AbstractAggregator implements Aggregator {
 	 */
 	protected abstract Double calculate(Double value, Double aggregation,
 			Position position, RenderContext context);
+
+	@Override
+	public boolean isTwoPhaseAggregator() {
+		return false;
+	}
 }
